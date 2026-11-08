@@ -8,9 +8,7 @@ using namespace std;
 
 enum TipoAcao { ACAO_ADICIONAR = 1, ACAO_REMOVER = 2, ACAO_CONCLUIR = 3 };
 
-
 // ESTRUTURA BASE - Tarefa (no da lista encadeada)
-
 struct Tarefa {
     int     id;
     string  titulo;
@@ -21,7 +19,6 @@ struct Tarefa {
     Tarefa(int i = 0, const string& t = "", int p = 1, int pz = 0, bool c = false)
         : id(i), titulo(t), prioridade(p), prazo(pz), concluida(c), prox(nullptr) {}
 };
-
 
 // FUNCOES AUXILIARES (entrada de dados e formatacao)  - R1
 
@@ -220,10 +217,177 @@ struct PilhaAcoes {
     }
 };
 
+#include <chrono>
+
+using namespace std::chrono;
+
+// R8 - ARVORE BINARIA DE BUSCA (indice por titulo)
+// Justificativa: o percurso in-ordem entrega os titulos ordenados
+// sem precisar reordenar a lista. Chave = titulo em minusculas.
+// Todas as funcoes abaixo sao RECURSIVAS (R3).
+struct NoArvore {
+    string    chave;
+    int       id;
+    NoArvore* esq;
+    NoArvore* dir;
+    NoArvore(const string& c, int i) : chave(c), id(i), esq(nullptr), dir(nullptr) {}
+};
+
+// Insere (chave, id) na BST. Media O(log n); pior caso O(n).
+// Retorno: raiz da (sub)arvore atualizada.
+NoArvore* inserirNaArvore(NoArvore* raiz, const string& chave, int id) {
+    if (raiz == nullptr) return new NoArvore(chave, id);
+    if (chave < raiz->chave) raiz->esq = inserirNaArvore(raiz->esq, chave, id);
+    else                     raiz->dir = inserirNaArvore(raiz->dir, chave, id);
+    return raiz;
+}
+
+// Busca uma chave na BST. 'visitados' conta os nos percorridos.
+// Retorno: no encontrado ou nullptr.
+NoArvore* buscarNaArvore(NoArvore* raiz, const string& chave, int& visitados) {
+    if (raiz == nullptr) return nullptr;
+    visitados++;
+    if (chave == raiz->chave) return raiz;
+    if (chave < raiz->chave) return buscarNaArvore(raiz->esq, chave, visitados);
+    return buscarNaArvore(raiz->dir, chave, visitados);
+}
+
+// Travessia IN-ORDEM: imprime as tarefas em ordem alfabetica de titulo.
+void percorrerEmOrdem(const NoArvore* raiz, const ListaTarefas& lista) {
+    if (raiz == nullptr) return;
+    percorrerEmOrdem(raiz->esq, lista);
+    Tarefa* t = lista.buscarPorId(raiz->id);
+    if (t != nullptr) imprimirTarefa(*t);
+    percorrerEmOrdem(raiz->dir, lista);
+}
+
+// Libera a arvore em pos-ordem (filhos antes do pai). Retorna nullptr.
+NoArvore* liberarArvore(NoArvore* raiz) {
+    if (raiz == nullptr) return nullptr;
+    liberarArvore(raiz->esq);
+    liberarArvore(raiz->dir);
+    delete raiz;
+    return nullptr;
+}
+
+struct ArvoreTitulos {
+    NoArvore* raiz = nullptr;
+
+    // Reconstroi o indice a partir da lista (garante dados atualizados).
+    void reconstruir(const ListaTarefas& lista) {
+        raiz = liberarArvore(raiz);
+        for (Tarefa* t = lista.head; t != nullptr; t = t->prox)
+            raiz = inserirNaArvore(raiz, minusculas(t->titulo), t->id);
+    }
+
+    ~ArvoreTitulos() { raiz = liberarArvore(raiz); }
+};
+
+// R9 - ORDENACAO (Insertion Sort feito do zero)
+// Complexidade: pior caso/medio O(n^2); melhor caso (ja ordenado) O(n).
+// Espaco extra O(1). E estavel e bom para listas pequenas, como as de
+// um gestor de tarefas. Ordena um VETOR DE PONTEIROS: so os ponteiros
+// se movem, os nos da lista nao sao copiados.
+typedef bool (*Comparador)(const Tarefa*, const Tarefa*);
+
+// Maior prioridade primeiro; empate resolvido pelo prazo mais proximo.
+bool vemAntesPorPrioridade(const Tarefa* a, const Tarefa* b) {
+    if (a->prioridade != b->prioridade) return a->prioridade > b->prioridade;
+    return a->prazo < b->prazo;
+}
+
+// Prazo mais proximo primeiro; empate resolvido pela maior prioridade.
+bool vemAntesPorPrazo(const Tarefa* a, const Tarefa* b) {
+    if (a->prazo != b->prazo) return a->prazo < b->prazo;
+    return a->prioridade > b->prioridade;
+}
+
+// Ordem alfabetica de titulo (sem diferenciar maiusculas).
+bool vemAntesPorTitulo(const Tarefa* a, const Tarefa* b) {
+    return minusculas(a->titulo) < minusculas(b->titulo);
+}
+
+// Ordena v[0..n-1] com Insertion Sort usando o comparador recebido.
+void insertionSort(Tarefa** v, int n, Comparador vemAntes) {
+    for (int i = 1; i < n; i++) {
+        Tarefa* chave = v[i];
+        int j = i - 1;
+        while (j >= 0 && vemAntes(chave, v[j])) {
+            v[j + 1] = v[j];   // desloca para a direita
+            j--;
+        }
+        v[j + 1] = chave;
+    }
+}
+
+// Copia os ponteiros da lista para um vetor alocado com new[].
+// Retorno: vetor (o chamador faz delete[]) ou nullptr se a lista e vazia.
+Tarefa** listaParaVetor(const ListaTarefas& lista, int& n) {
+    n = lista.contarRecursivo(lista.head);
+    if (n == 0) return nullptr;
+    Tarefa** v = new Tarefa*[n];
+    Tarefa* atual = lista.head;
+    for (int i = 0; i < n; i++) {
+        v[i] = atual;
+        atual = atual->prox;
+    }
+    return v;
+}
+
+// Religa os nos da lista na ordem do vetor (a lista passa a ficar ordenada).
+void vetorParaLista(ListaTarefas& lista, Tarefa** v, int n) {
+    for (int i = 0; i < n - 1; i++) v[i]->prox = v[i + 1];
+    v[n - 1]->prox = nullptr;
+    lista.head = v[0];
+}
+
+// R10 - BUSCAS (sequencial e binaria) sobre o vetor de ponteiros
+typedef int (*BuscaFn)(Tarefa**, int, const string&, int&);
+
+// Busca sequencial por titulo. Complexidade O(n).
+// Retorno: indice ou -1. 'comparacoes' recebe o numero de comparacoes.
+int buscaSequencial(Tarefa** v, int n, const string& chave, int& comparacoes) {
+    comparacoes = 0;
+    for (int i = 0; i < n; i++) {
+        comparacoes++;
+        if (minusculas(v[i]->titulo) == chave) return i;
+    }
+    return -1;
+}
+
+// Busca binaria por titulo (vetor PRECISA estar ordenado por titulo).
+// Complexidade O(log n). Retorno: indice ou -1.
+int buscaBinaria(Tarefa** v, int n, const string& chave, int& comparacoes) {
+    comparacoes = 0;
+    int inicio = 0, fim = n - 1;
+    while (inicio <= fim) {
+        int meio = inicio + (fim - inicio) / 2;
+        string atual = minusculas(v[meio]->titulo);
+        comparacoes++;
+        if (atual == chave) return meio;
+        if (atual < chave) inicio = meio + 1;
+        else               fim = meio - 1;
+    }
+    return -1;
+}
+
+// Executa uma busca varias vezes e mostra comparacoes e tempo medio.
+void executarEMedir(const string& nome, BuscaFn busca, Tarefa** v, int n,
+                    const string& chave) {
+    const int REPETICOES = 100000;
+    int comparacoes = 0, indice = -1;
+    auto inicio = steady_clock::now();
+    for (int r = 0; r < REPETICOES; r++) indice = busca(v, n, chave, comparacoes);
+    auto fim = steady_clock::now();
+    long long ns = duration_cast<nanoseconds>(fim - inicio).count() / REPETICOES;
+    cout << "  " << nome << ": " << (indice >= 0 ? "encontrado" : "nao encontrado")
+         << " | comparacoes: " << comparacoes << " | tempo medio: " << ns << " ns\n";
+}
 
 struct Gestor {
-    ListaTarefas lista;
-    PilhaAcoes   pilha;
+    ListaTarefas  lista;
+    PilhaAcoes    pilha;
+    ArvoreTitulos arvore;
 };
 
 // OPERACOES DO MENU
@@ -315,14 +479,94 @@ void desfazerAcao(Gestor& g) {
     }
 }
 
+// Escolhe a funcao de comparacao conforme a opcao do usuario.
+Comparador escolherComparador(int opcao) {
+    if (opcao == 1) return vemAntesPorPrioridade;
+    if (opcao == 2) return vemAntesPorPrazo;
+    return vemAntesPorTitulo;
+}
+
+// Ordena a lista pelo criterio escolhido (Insertion Sort) e a exibe.
+void ordenarTarefas(Gestor& g) {
+    if (g.lista.isEmpty()) { cout << "(nenhuma tarefa cadastrada)\n"; return; }
+    cout << "Ordenar por: 1) Prioridade  2) Prazo  3) Titulo\n";
+    int opcao = lerInteiro("Escolha: ", 1, 3);
+    int n = 0;
+    Tarefa** v = listaParaVetor(g.lista, n);
+    insertionSort(v, n, escolherComparador(opcao));
+    vetorParaLista(g.lista, v, n);
+    delete[] v;
+    v = nullptr;
+    cout << "Lista ordenada!\n";
+    listarTarefas(g);
+}
+
+// Compara busca sequencial x binaria para o titulo buscado (numero de
+// comparacoes e tempo medio). Usa um vetor de ponteiros ordenado por titulo,
+// pois a busca binaria exige dados ordenados. Parametros: lista, chave.
+void compararBuscas(const ListaTarefas& lista, const string& chave) {
+    int n = 0;
+    Tarefa** v = listaParaVetor(lista, n);
+    insertionSort(v, n, vemAntesPorTitulo);
+    cout << "\n--- Comparacao de buscas (" << n << " tarefas) ---\n";
+    executarEMedir("Sequencial O(n)    ", buscaSequencial, v, n, chave);
+    executarEMedir("Binaria    O(log n)", buscaBinaria,    v, n, chave);
+    delete[] v;
+    v = nullptr;
+}
+
+// Busca uma tarefa pelo titulo usando a arvore binaria de busca.
+void buscarPorTitulo(Gestor& g) {
+    if (g.lista.isEmpty()) { cout << "(nenhuma tarefa cadastrada)\n"; return; }
+    g.arvore.reconstruir(g.lista);
+    string chave = minusculas(lerTexto("Titulo exato a buscar: "));
+    int visitados = 0;
+    NoArvore* no = buscarNaArvore(g.arvore.raiz, chave, visitados);
+    if (no == nullptr) cout << "Nenhuma tarefa com esse titulo.\n";
+    else imprimirTarefa(*g.lista.buscarPorId(no->id));
+    cout << "(nos visitados na arvore: " << visitados << ")\n";
+    compararBuscas(g.lista, chave);
+}
+
+// Lista as tarefas em ordem alfabetica via percurso in-ordem da BST.
+void listarAlfabetico(Gestor& g) {
+    cout << "\n=== TAREFAS EM ORDEM ALFABETICA ===\n";
+    if (g.lista.isEmpty()) { cout << "(nenhuma tarefa cadastrada)\n"; return; }
+    g.arvore.reconstruir(g.lista);
+    percorrerEmOrdem(g.arvore.raiz, g.lista);
+}
+
+// Lista as tarefas na ordem escolhida pelo usuario (cadastro, prazo ou
+// prioridade) SEM alterar a ordem guardada na lista: ordena apenas um vetor
+// de ponteiros com o Insertion Sort. Parametro: g (somente leitura).
+void listarComOrdem(const Gestor& g) {
+    if (g.lista.isEmpty()) { listarTarefas(g); return; }
+    cout << "Modo da lista: 1) Ordem de cadastro  2) Por prazo (data)  3) Por prioridade\n";
+    int opcao = lerInteiro("Escolha: ", 1, 3);
+    if (opcao == 1) { listarTarefas(g); return; }
+    int n = 0;
+    Tarefa** v = listaParaVetor(g.lista, n);
+    insertionSort(v, n, opcao == 2 ? vemAntesPorPrazo : vemAntesPorPrioridade);
+    cout << "\n=== TAREFAS POR " << (opcao == 2 ? "PRAZO (mais proximo primeiro)"
+                                                : "PRIORIDADE (maior primeiro)") << " ===\n";
+    for (int i = 0; i < n; i++) imprimirTarefa(*v[i]);
+    cout << "Total: " << n << " | Pendentes: "
+         << g.lista.contarPendentes(g.lista.head) << "\n";
+    delete[] v;
+    v = nullptr;
+}
+
 // Exibe o menu principal.
 void mostrarMenu() {
     cout << "\n================= MENU =================\n"
          << " 1) Cadastrar tarefas\n"
-         << " 2) Listar tarefas\n"
+         << " 2) Listar tarefas (cadastro, prazo ou prioridade)\n"
          << " 3) Concluir tarefa\n"
          << " 4) Remover tarefa\n"
          << " 5) Desfazer ultima acao (Ctrl+Z)\n"
+         << " 6) Ordenar tarefas (salva a nova ordem)\n"
+         << " 7) Buscar por titulo (arvore)\n"
+         << " 8) Listar em ordem alfabetica (arvore)\n"
          << " 0) Sair\n";
 }
 
@@ -330,22 +574,25 @@ void mostrarMenu() {
 void executarOpcao(Gestor& g, int opcao) {
     switch (opcao) {
         case 1:  cadastrarTarefas(g);  break;
-        case 2:  listarTarefas(g);     break;
+        case 2:  listarComOrdem(g);    break;
         case 3:  concluirTarefa(g);    break;
         case 4:  removerTarefa(g);     break;
         case 5:  desfazerAcao(g);      break;
+        case 6:  ordenarTarefas(g);    break;
+        case 7:  buscarPorTitulo(g);   break;
+        case 8:  listarAlfabetico(g);  break;
         default: break;
     }
 }
 
 int main() {
     Gestor gestor;
-    cout << "  Gestor de Tarefas - Etapa 1 (lista e pilha)  \n";
+    cout << "  Gestor de Tarefas - Etapa 2 (com arvore, ordenacao e busca)  \n";
 
     int opcao;
     do {
         mostrarMenu();
-        opcao = lerInteiro("Escolha uma opcao: ", 0, 5);
+        opcao = lerInteiro("Escolha uma opcao: ", 0, 8);
         executarOpcao(gestor, opcao);
     } while (opcao != 0);
 
